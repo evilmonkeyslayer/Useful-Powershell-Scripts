@@ -3,10 +3,10 @@
     Reports disk usage for one or more directory trees, like the Linux `du` command.
 
 .DESCRIPTION
-    du.ps1 is a self-contained PowerShell equivalent to the Linux `du` (disk usage) utility.
-    It walks directory trees with the built-in .NET types System.IO.DirectoryInfo and
-    System.IO.FileInfo, sums file sizes using 64-bit integers, prints a cumulative size
-    per directory (largest first), and prints a grand total.
+    du.ps1 is a self-contained PowerShell similar to the Linux `du` (disk usage)
+    utility. It walks directory trees with the built-in .NET types System.IO.DirectoryInfo
+    and System.IO.FileInfo, sums file sizes using 64-bit integers, prints a cumulative
+    size per directory (largest first), and prints a grand total.
 
     Nothing is loaded into memory beyond one record per directory (and, optionally,
     the N largest files), so large trees are scanned lazily with EnumerateFiles() and
@@ -26,10 +26,11 @@
     Every switch also has a one-letter form, and no two switches share a letter:
     -p Path, -d Depth (also -MaxDepth), -a All, -s Summary, -h HumanReadable,
     -r Sort, -u Ascending, -n ByName, -b Largest, -t Top, -x Exclude, -v Progress,
-    -q NoProgress, -l FollowLinks, -m Stats, -i Help. So .\du.ps1 C:\Users -h is the same as -HumanReadable, and
-    .\du.ps1 . -s -h -q is the same as -Summary -HumanReadable -NoProgress. Letters
-    are matched case-insensitively, as everywhere in PowerShell: -h and -H are the
-    same switch. Note that -h means human-readable (as in du), not help; help is -i.
+    -q NoProgress, -l FollowLinks, -m Stats, -i Help. So .\du.ps1 C:\Users -h is the
+    same as -HumanReadable, and .\du.ps1 . -s -h -q is the same as -Summary
+    -HumanReadable -NoProgress. Letters are matched case-insensitively, as everywhere
+    in PowerShell: -h and -H are the same switch. Note that -h means human-readable
+    (as in du), not help; help is -i.
 
 .PARAMETER Path
     Short form: -p
@@ -37,6 +38,10 @@
     Defaults to the current directory when any other switch is given; a run with no
     switches at all prints the switch reference instead. A file path is accepted too
     and reported as a single entry (like `du somefile`).
+    Paths are checked literally first, so names containing [ ] ? * (for example
+    C:\Torrents\[group] or C:\Data\data[1]) are read as real names, not globs.
+    Relative paths such as . .. and .\sub are measured from the directory shown in
+    the prompt, which is also where a run with no -Path starts.
 
 .PARAMETER Depth
     Short form: -d, also spelled -MaxDepth (like `du --max-depth=N`)
@@ -63,6 +68,8 @@
     Short form: -h
     Print sizes with B/KB/MB/GB/TB suffixes (1024-based, like `du -h`).
     Without it, sizes are printed as a byte count (like `du` without -h).
+    Thousands separators are always the invariant-culture comma, whatever the
+    machine's regional settings are.
 
 .PARAMETER Sort
     Short form: -r
@@ -90,10 +97,12 @@
 .PARAMETER Progress
     Short form: -v
     Force the progress display on. Progress is on by default while walking trees.
+    Cannot be combined with -NoProgress.
 
 .PARAMETER NoProgress
     Short form: -q
     Disable the progress display. Useful in scripts, CI jobs and log files.
+    Cannot be combined with -Progress.
 
 .PARAMETER Top
     Short form: -t
@@ -104,6 +113,8 @@
     Wildcard patterns to skip. Matched against a directory or file name; a pattern
     containing \ or / is matched against the full path instead. Matching directories
     are skipped together with everything below them (like `du --exclude`).
+    Each pattern is tried both as a glob (du-compatible) and as a plain name, so a
+    folder whose real name contains [ or ? is matched by writing that name exactly.
 
 .PARAMETER FollowLinks
     Short form: -l
@@ -113,8 +124,8 @@
 
 .PARAMETER Stats
     Short form: -m
-    Print scan statistics (directories, files, skipped links, skipped hidden files,
-    excluded entries, errors) after the table.
+    Print scan statistics (elapsed time, directories, files, skipped links, skipped
+    hidden files, excluded entries, errors) after the table.
 
 .PARAMETER Help
     Short form: -i
@@ -190,6 +201,10 @@
     Wildcard paths are expanded before scanning.
 
 .EXAMPLE
+    .\du.ps1 -Path 'C:\Torrents\[group]Rartv' -h
+    A literal folder name containing brackets is read as a name, not as a glob.
+
+.EXAMPLE
     .\du.ps1 -Path C:\Links -FollowLinks -Stats
     Follow junctions/symlinks (cycle-protected) and report how much was skipped.
 
@@ -203,14 +218,20 @@
       -h HumanReadable -r Sort           -u Ascending     -n ByName
       -b Largest       -t Top            -x Exclude       -v Progress
       -q NoProgress    -l FollowLinks    -m Stats         -i Help
-    Each letter belongs to exactly one switch; the script checks this at run time
-    and refuses to start if two switches ever claim the same letter.
+    Each letter belongs to exactly one switch; the script checks this at start-up,
+    before any scanning, and refuses to start if two switches ever claim the same
+    letter. The reference listing is built from the same check, so it can never
+    drift from the real parameters.
     Because CmdletBinding adds the PowerShell common parameters, -p, -d, -t, -v and
     -i are these switches rather than the usual prefixes of -PipelineVariable,
     -Debug, -Transcript, -Verbose and -InformationVariable; the full names of those
-    common parameters still work.
+    common parameters still work, and -Verbose reports which paths were scanned and
+    why a path was dropped.
 
     Known differences from Linux du:
+      * Relative paths (. .. .\sub) are resolved from PowerShell's current
+        location, the directory in the prompt - not from the process working
+        directory, which some hosts leave at C:\Windows\System32.
       * Sizes are logical file sizes (FileInfo.Length), not 512/1024-byte block
         counts. Sparse regions and filesystem slack space are therefore not
         reflected, which is usually a large difference on NTFS.
@@ -230,6 +251,8 @@
         walk early.
       * -Summary is the closest thing to `du -s`; there is no `-a` (print every
         file) equivalent, -Top is the practical substitute.
+      * -Exclude never removes a path named explicitly on the command line; it
+        only prunes entries found while walking. du skips an excluded root.
       * Overlapping paths on one command line are summed independently, so a
         nested pair such as C:\Users and C:\Users\Public inflates the grand total
         (du behaves the same way).
@@ -241,9 +264,16 @@
         points at an already measured directory can still be counted twice there.
       * Paths longer than the column width are abbreviated in the middle, for
         example C:\Users\markc\Downloads\Slow...5.10bit.HDR-MIXED[rartv].
-      * Launched with `powershell -File`, comma-separated values for -Path and
-        -Exclude arrive as a single string; the script splits them, so both
-        `-Exclude a,b` and `-Exclude 'a','b'` work.
+      * Launched with `powershell -File`, comma-separated values for -Path arrive
+        as a single string; the script splits them, so both `-Path a,b` and
+        `-Path 'a','b'` work. -Exclude is split on commas too, but never inside a
+        pattern containing \ or / so a path pattern may hold a comma.
+      * Unreadable paths are reported as warnings (not coloured console text), so
+        they land on the warning stream and can be redirected or silenced with
+        -WarningAction SilentlyContinue.
+      * Exit code is 1 when any path could not be read, and 0 otherwise, which
+        makes the script usable as a CI check. A dot-sourced run leaves the caller
+        session alone and reports the code in $duExitCode instead.
       * Run with ExecutionPolicy Bypass (or Unblock-File) if the file arrived
         from another machine and carries a zone marker.
 #>
@@ -303,9 +333,14 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# Parameter metadata for this script, so the switch listing and the alias
-# uniqueness check read the real parameters instead of a hand-written copy.
-$script:Command = $MyInvocation.MyCommand
+# This script's own command info, so the switch reference, the alias check and the
+# banner read real metadata instead of a hand-written copy, and stay correct if the
+# file is renamed.
+$script:Command    = $MyInvocation.MyCommand
+$script:ScriptName = if ($script:Command) { $script:Command.Name } else { 'du.ps1' }
+# '.' means dot-sourced: an exit there would close the caller's session, so the
+# exit code is only recorded in that case.
+$script:DotSourced = $MyInvocation.InvocationName -eq '.'
 
 # ---------------------------------------------------------------------------
 # Constants and small helpers
@@ -319,6 +354,7 @@ $ProgressInterval = 150    # ms between progress repaints
 $MaxStoredErrors  = 100    # error details kept in memory; the count is exact
 $MaxShownErrors   = 10     # error details printed at the end
 $LinkHopLimit     = 8      # reparse hops allowed in a -FollowLinks chain
+$NoLinks          = @()    # shared empty link trail, so plain frames do not allocate
 
 # .NET Core (PowerShell 7+) can name the real target of a junction or symlink.
 # Windows PowerShell 5.1 cannot, so cycle detection there falls back to the hop
@@ -326,6 +362,22 @@ $LinkHopLimit     = 8      # reparse hops allowed in a -FollowLinks chain
 $CanResolveLinks = $PSVersionTable.PSVersion.Major -ge 6
 
 $Culture = [System.Globalization.CultureInfo]::InvariantCulture
+
+function New-DuObjectList {
+    # The leading comma stops PowerShell unrolling the empty list into nothing
+    # when the function's output is assigned to a variable.
+    return ,[System.Collections.Generic.List[object]]::new()
+}
+
+function New-DuStringList {
+    return ,[System.Collections.Generic.List[string]]::new()
+}
+
+function New-DuHashSet {
+    <#  Case-insensitive set without lowercasing every key by hand. #>
+    return ,[System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+}
 
 function Get-DuLinkTargetPath {
     <#  Final target of a reparse-point directory, when the runtime can tell us. #>
@@ -359,28 +411,27 @@ function Format-DuSize {
     }
 
     if ($index -eq 0) { return ('{0} B' -f $Bytes.ToString('N0', $Culture)) }
-    if ($value -ge 100) { return ('{0:N0} {1}' -f $value, $units[$index]) }
-    return ('{0:N1} {1}' -f $value, $units[$index])
-}
-
-function New-DuList {
-    param([string] $Type = 'object')
-    return New-Object ('System.Collections.Generic.List[' + $Type + ']')
+    if ($value -ge 100) { return ($value.ToString('N0', $Culture) + ' ' + $units[$index]) }
+    return ($value.ToString('N1', $Culture) + ' ' + $units[$index])
 }
 
 function Split-DuList {
-    <#  'powershell -File du.ps1 -Exclude a,b' arrives as one string; split it. #>
+    <#
+        'powershell -File du.ps1 -Exclude a,b' arrives as one string; split it.
+        Patterns holding \ or / are left intact, so a path pattern may contain a
+        comma ('*\Program Files (x86),Data') without being chopped in half.
+    #>
     param([string[]] $Values)
 
-    $items = New-DuList 'string'
-    foreach ($value in $Values) {
+    $items = New-DuStringList
+    foreach ($value in @($Values)) {
         if ([string]::IsNullOrWhiteSpace($value)) { continue }
-        if ($value -match ',') {
+        if (($value -match ',') -and ($value -notmatch '[\\/]')) {
             foreach ($part in ($value -split ',')) {
-                if ($part.Trim().Length -gt 0) { $items.Add($part.Trim()) | Out-Null }
+                if ($part.Trim().Length -gt 0) { $items.Add($part.Trim()) }
             }
         } else {
-            $items.Add($value) | Out-Null
+            $items.Add($value)
         }
     }
     return ,$items
@@ -404,10 +455,15 @@ function Get-DuMessage {
 function Add-DuError {
     param($Ctx, [string] $Where, $ErrorRecord, [string] $Prefix)
 
+    if ([string]::IsNullOrWhiteSpace($Where)) { $Where = '(unknown path)' }
+
     # One report per path: a directory that cannot be listed fails both for its
-    # files and for its subdirectories, and reporting it twice is noise.
-    $key = $Where.ToLowerInvariant()
+    # files and for its subdirectories, and reporting it twice is noise. The set is
+    # case-insensitive, so two spellings of one path are not two reports.
+    $key = $Where
     if ($Ctx.ErrorPaths.Contains($key)) { return }
+    # HashSet.Add returns a Boolean: swallow it, or it leaks into the output of
+    # whichever function is reporting the error.
     $null = $Ctx.ErrorPaths.Add($key)
 
     $message = Get-DuMessage $ErrorRecord
@@ -419,21 +475,49 @@ function Add-DuError {
     }
 }
 
+function ConvertTo-DuPatterns {
+    <#
+        Compile -Exclude once instead of re-classifying every pattern for every
+        entry: name patterns are matched against the leaf, pathy patterns (those
+        holding \ or /) against the full path.
+    #>
+    param([string[]] $Raw)
+
+    $names = New-DuStringList
+    $paths = New-DuStringList
+
+    foreach ($pattern in (Split-DuList -Values $Raw)) {
+        if ($pattern -match '[\\/]') { $paths.Add($pattern) } else { $names.Add($pattern) }
+    }
+
+    return @{
+        Names   = $names
+        Paths   = $paths
+        HasPath = ($paths.Count -gt 0)
+        Any     = (($names.Count + $paths.Count) -gt 0)
+    }
+}
+
 function Test-DuExcluded {
-    <#  Pattern match against the leaf name, or the full path for pathy patterns. #>
-    param([string] $Name, [string] $FullPath, [string[]] $Patterns)
+    <#
+        Match a compiled -Exclude set. Each pattern is tried as a glob (du's
+        --exclude semantics) and as a plain name, so a folder whose real name
+        contains [ or ? is still matched when written exactly.
+    #>
+    param($Patterns, [string] $Name, [string] $FullPath)
 
-    if (-not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    if (-not $Patterns.Any) { return $false }
 
-    foreach ($pattern in $Patterns) {
-        if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
-        if ($pattern -match '[\\/]') {
-            if ($FullPath -like $pattern) { return $true }
-        }
-        elseif ($Name -like $pattern) {
-            return $true
+    foreach ($pattern in $Patterns.Names) {
+        if ($Name -like $pattern -or $Name -eq $pattern) { return $true }
+    }
+
+    if ($Patterns.HasPath) {
+        foreach ($pattern in $Patterns.Paths) {
+            if ($FullPath -like $pattern -or $FullPath -eq $pattern) { return $true }
         }
     }
+
     return $false
 }
 
@@ -442,10 +526,10 @@ function Write-DuProgress {
 
     if (-not $Ctx.Progress) { return }
 
-    $now = Get-Date
-    $elapsed = (New-TimeSpan -Start $Ctx.LastProgress -End $now).TotalMilliseconds
-    if ($elapsed -lt $ProgressInterval -and ($Ctx.Dirs % 500) -ne 0) { return }
-    $Ctx.LastProgress = $now
+    # A stopwatch rather than Get-Date/New-TimeSpan: no DateTime allocation per
+    # directory in a loop that runs over hundreds of thousands of them.
+    if ($Ctx.Clock.ElapsedMilliseconds -lt $Ctx.NextProgress) { return }
+    $Ctx.NextProgress = $Ctx.Clock.ElapsedMilliseconds + $ProgressInterval
 
     try {
         Write-Progress -Activity 'du: measuring disk usage' `
@@ -465,6 +549,31 @@ function Complete-DuProgress {
     try { Write-Progress -Activity 'du: measuring disk usage - Completed' -Completed } catch { }
 }
 
+function Set-DuExitCode {
+    <#
+        Report the exit code the way du does: 0 on success, 1 when something could
+        not be read. Recording it as well makes it visible to a dot-sourced run,
+        which must not exit and close its own session.
+    #>
+    param([int] $Code)
+
+    $script:duExitCode = $Code
+    if ($script:DotSourced) { return }
+    exit $Code
+}
+
+function Stop-DuScript {
+    <#
+        End the run: 1 when any path could not be read, 0 otherwise. A plain run
+        also exits 0 on success so a stale $LASTEXITCODE from an earlier command is
+        not mistaken for a failed scan.
+    #>
+    param($Ctx)
+    Complete-DuProgress $Ctx
+
+    if ($Ctx.ErrorsCount -gt 0) { Set-DuExitCode 1 } else { Set-DuExitCode 0 }
+}
+
 function Add-DuTopFile {
     <#  Keep a bounded, size-descending list of the N largest files. #>
     param($Ctx, [Int64] $Length, [string] $FullPath)
@@ -482,52 +591,119 @@ function Add-DuTopFile {
     $list.Insert($index, [pscustomobject]@{ Path = $FullPath; Bytes = $Length })
 }
 
+function Get-DuBasePath {
+    <#
+        The directory relative paths are measured from: PowerShell's own current
+        location, which is what the user sees in the prompt.
+    #>
+    $location = Get-Location -PSProvider FileSystem -ErrorAction SilentlyContinue
+    if ($location -and $location.Path) { return $location.Path }
+    if ($PWD.Path) { return $PWD.Path }
+    return [System.IO.Directory]::GetCurrentDirectory()
+}
+
+function Get-DuLiteralPath {
+    <#
+        Resolve one -Path entry without wildcard interpretation.
+
+        Resolve-Path -LiteralPath does two things du needs: [ ] ? * are taken as
+        literal characters, so a folder named data[1] is found instead of being read
+        as a character class, and a relative path is anchored on PowerShell's own
+        current location - the directory shown in the prompt. Letting .NET resolve
+        '.' and '..' would use the *process* working directory instead, which hosts
+        such as the ISE leave at C:\Windows\System32, so 'du.ps1 .' would measure
+        System32 rather than the current folder.
+
+        Returns $null when the path does not exist.
+    #>
+    param([string] $Item)
+
+    $found = @(Resolve-Path -LiteralPath $Item -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 0) { return $null }
+
+    $target = $found[0].ProviderPath
+    if (-not $target) { $target = [string] $found[0].Path }
+
+    # Drop a trailing \ from C:\dir\ so the printed path looks like a directory
+    # name; a bare root such as C:\ keeps its separator.
+    if ($target.Length -gt 3 -and $target.EndsWith('\') -and -not $target.EndsWith(':\')) {
+        $target = $target.TrimEnd('\')
+    }
+    return $target
+}
+
+function Test-DuPathExists {
+    <#  True when the entry names something real, wildcards not read as patterns. #>
+    param([string] $Item)
+    return [bool] (Get-DuLiteralPath $Item)
+}
+
+function Add-DuRoot {
+    <#  Add a resolved path to the root list unless it is already there. #>
+    param($Roots, [string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    if (-not $Roots.Contains($Path)) { $Roots.Add($Path) }
+}
+
 function Resolve-DuRoots {
-    <#  Expand -Path (wildcards allowed) into existing absolute paths. #>
-    param([string[]] $Requested)
+    <#
+        Expand -Path into existing absolute paths, literal names checked first.
+        A -Path that cannot be resolved is reported like du reports a bad operand
+        and, when $Ctx is given, counted as an error so the exit code becomes 1.
+    #>
+    param([string[]] $Requested, $Ctx)
 
-    $roots = New-DuList 'string'
+    function Add-DuRootFailure([string] $Path, [string] $Message) {
+        Write-Warning ('du: ''' + $Path + ''': ' + $Message)
+        if (-not $Ctx) { return }
+        $Ctx.ErrorsCount++
+        if ($Ctx.Errors.Count -lt $MaxStoredErrors) {
+            $Ctx.Errors.Add([pscustomobject]@{ Path = $Path; Message = $Message })
+        }
+    }
 
-    foreach ($raw in $Requested) {
+    $roots = New-DuStringList
+
+    foreach ($raw in @($Requested)) {
         if ([string]::IsNullOrWhiteSpace($raw)) { continue }
 
         # 'powershell -File du.ps1 -Path a,b' hands over "a,b" as one string, so
         # split comma-joined lists unless the whole string really is a path.
-        $candidates = New-DuList 'string'
-        if (($raw -match ',') -and (-not (Test-Path -LiteralPath $raw))) {
+        $candidates = New-DuStringList
+        if (($raw -match ',') -and (-not (Test-DuPathExists $raw))) {
             foreach ($part in ($raw -split ',')) {
-                if ($part.Trim().Length -gt 0) { $candidates.Add($part.Trim()) | Out-Null }
+                if ($part.Trim().Length -gt 0) { $candidates.Add($part.Trim()) }
             }
         } else {
-            $candidates.Add($raw) | Out-Null
+            $candidates.Add($raw)
         }
 
         foreach ($item in $candidates) {
+            # Literal first: Resolve-Path -LiteralPath keeps [ ] ? * as plain
+            # characters and anchors a relative path on the PowerShell location, so
+            # 'lit[1]' is measured and '.' means the directory in the prompt.
+            $literal = Get-DuLiteralPath $item
+            if ($literal) {
+                Add-DuRoot $roots $literal
+                continue
+            }
+
             if ($item -match '[\*\?\[]') {
-                $found2 = @(Resolve-Path -Path $item -ErrorAction SilentlyContinue)
-                if ($found2.Count -eq 0) {
-                    Write-Warning "du: '$item': No match found."
+                $found = @(Resolve-Path -Path $item -ErrorAction SilentlyContinue)
+                if ($found.Count -eq 0) {
+                    Add-DuRootFailure $item 'No match found.'
                     continue
                 }
-                foreach ($found in $found2) {
-                    $target = $found.ProviderPath
-                    if (-not $target) { $target = [string] $found.Path }
-                    $roots.Add($target) | Out-Null
+                foreach ($entry in $found) {
+                    $target = $entry.ProviderPath
+                    if (-not $target) { $target = [string] $entry.Path }
+                    Add-DuRoot $roots $target
                 }
                 continue
             }
 
-            if (-not (Test-Path -LiteralPath $item)) {
-                Write-Warning "du: '$item': No such file or directory."
-                continue
-            }
-
-            try {
-                $itemInfo = Get-Item -LiteralPath $item -Force
-                $roots.Add($itemInfo.FullName) | Out-Null
-            } catch {
-                Write-Warning "du: '$item': $($_.Exception.Message)"
-            }
+            Add-DuRootFailure $item 'No such file or directory.'
         }
     }
 
@@ -542,12 +718,12 @@ function Invoke-DuTree {
     <#
         Walks one root and returns @{ Records; Total; FileRoot }.
         Records hold one object per directory with Self (files directly inside),
-        Total (cumulative) and a Parent reference. Totals are rolled up afterwards
-        by processing deepest directories first.
+        Total (cumulative), Shown (whether it gets a row) and a Parent reference.
+        Totals are rolled up afterwards from the deepest directories upwards.
     #>
     param([string] $Root, $Ctx)
 
-    $records = New-DuList 'object'
+    $records = New-DuObjectList
     $rootTotal = [Int64] 0
 
     # A file passed as -Path behaves like `du somefile`.
@@ -558,7 +734,8 @@ function Invoke-DuTree {
             $Ctx.Files++
             Add-DuTopFile $Ctx $bytes $file.FullName
             $records.Add([pscustomobject]@{
-                Path = $file.FullName; Depth = 0; Self = $bytes; Total = $bytes; Files = 1; Parent = $null
+                Path = $file.FullName; Shown = $true; Self = $bytes; Total = $bytes;
+                Files = 1; Parent = $null
             })
             return @{ Records = $records; Total = $bytes; FileRoot = $true }
         } catch {
@@ -579,36 +756,42 @@ function Invoke-DuTree {
         return @{ Records = $records; Total = [Int64] 0; FileRoot = $false }
     }
 
-    $visited = New-Object 'System.Collections.Generic.HashSet[string]'
-    $visited.Add($rootInfo.FullName.ToLowerInvariant()) | Out-Null
+    $visited = New-DuHashSet
+    # HashSet.Add hands back a Boolean; drop it so it cannot join this function's
+    # output and corrupt the result object handed back to the caller.
+    $null = $visited.Add($rootInfo.FullName)
 
     $maxDepth = $Ctx.MaxDepth
+
+    # In summary mode no per-directory object is needed at all, so nothing is
+    # allocated and every byte goes straight into the running root total.
+    $keepRecords = -not $Ctx.Summary
+    $rootRecord = $null
+
     $stack = New-Object 'System.Collections.Generic.Stack[object]'
-    $stack.Push([pscustomobject]@{ Dir = $rootInfo; Depth = 0; Owner = $null; Hops = 0; Links = @() })
+    $stack.Push([pscustomobject]@{
+        Dir = $rootInfo; Depth = 0; Parent = $null; Hops = 0; Links = $NoLinks
+    })
 
     while ($stack.Count -gt 0) {
         $item = $stack.Pop()
         $dir = $item.Dir
 
         # The whole tree is measured regardless of -Depth, like `du --max-depth=N`:
-        # directories deeper than the display limit get no row of their own, and
-        # everything they contain rolls into the nearest shallower directory that
-        # does get a row. Only the rows are trimmed, never the measurement.
-        $keep = ($maxDepth -lt 0 -or $item.Depth -le $maxDepth)
-        if ($keep) {
+        # directories deeper than the display limit still get a record (so their
+        # bytes roll upward) but Shown stays false, so they print no row.
+        $record = $null
+        if ($keepRecords) {
             $record = [pscustomobject]@{
                 Path   = $dir.FullName
-                Depth  = $item.Depth
+                Shown  = ($maxDepth -lt 0 -or $item.Depth -le $maxDepth)
                 Self   = [Int64] 0
                 Total  = [Int64] 0
                 Files  = 0
-                Parent = $item.Owner
+                Parent = $item.Parent
             }
-            if (-not $Ctx.Summary) { $records.Add($record) | Out-Null }
-            $owner = $record
-        } else {
-            $record = $null
-            $owner = $item.Owner
+            $records.Add($record)
+            if (-not $rootRecord) { $rootRecord = $record }
         }
 
         $Ctx.Dirs++
@@ -630,22 +813,26 @@ function Invoke-DuTree {
                         $Ctx.HiddenSkipped++
                         continue
                     }
-                    if (Test-DuExcluded $file.Name $file.FullName $Ctx.Exclude) {
-                        $Ctx.Excluded++
-                        continue
+
+                    # FullName is only built when something actually needs it.
+                    if ($Ctx.ExcludePatterns.Any) {
+                        $full = $null
+                        if ($Ctx.ExcludePatterns.HasPath) { $full = $file.FullName }
+                        if (Test-DuExcluded $Ctx.ExcludePatterns $file.Name $full) {
+                            $Ctx.Excluded++
+                            continue
+                        }
                     }
 
                     $length = [Int64] $file.Length
-                    if ($keep) {
+                    if ($record) {
                         $record.Self += $length
                         $record.Files++
                     } else {
-                        # No row for this directory, so credit its owning row.
-                        $owner.Total += $length
+                        $rootTotal += $length
                     }
                     $Ctx.Files++
-                    if ($Ctx.Summary) { $rootTotal += $length }
-                    Add-DuTopFile $Ctx $length $file.FullName
+                    if ($Ctx.Top -gt 0) { Add-DuTopFile $Ctx $length $file.FullName }
                 } catch {
                     Add-DuError $Ctx $file.FullName $_
                 }
@@ -658,54 +845,51 @@ function Invoke-DuTree {
         try {
             foreach ($child in $dir.EnumerateDirectories()) {
                 try { $attrs = $child.Attributes } catch { $attrs = [System.IO.FileAttributes]::Normal }
-                $isLink = ($attrs -band $ReparseFlag) -ne 0
 
+                # Exclusion is decided before the path is recorded anywhere, so an
+                # excluded directory counts as excluded (not as a repeat) and costs
+                # nothing beyond the name match.
+                if ($Ctx.ExcludePatterns.Any) {
+                    $full = $null
+                    if ($Ctx.ExcludePatterns.HasPath) { $full = $child.FullName }
+                    if (Test-DuExcluded $Ctx.ExcludePatterns $child.Name $full) {
+                        $Ctx.Excluded++
+                        continue
+                    }
+                }
+
+                $isLink = ($attrs -band $ReparseFlag) -ne 0
                 if ($isLink -and (-not $Ctx.FollowLinks)) {
                     $Ctx.LinkSkipped++
                     continue
                 }
 
                 $hops = $item.Hops
+                $links = $item.Links
                 if ($isLink) {
                     # Two guards against a link chain that folds back on itself:
                     # the same link name reappearing on this branch, and a hard
                     # limit on how many links a single branch may traverse.
-                    if ($item.Links -contains $child.Name) {
-                        $Ctx.CycleSkipped++
-                        continue
-                    }
-                    if ($hops + 1 -gt $Ctx.LinkHopLimit) {
-                        $Ctx.CycleSkipped++
-                        continue
-                    }
+                    if ($links -contains $child.Name) { $Ctx.CycleSkipped++; continue }
+                    if ($hops + 1 -gt $LinkHopLimit) { $Ctx.CycleSkipped++; continue }
                     $hops = $hops + 1
+                    $links = @($links) + @($child.Name)
                 }
 
                 # De-duplicate by the real target when the runtime can name it, so
                 # a junction pointing back at an already measured directory is
                 # counted once rather than re-walked under a longer path.
-                $key = $child.FullName.ToLowerInvariant()
+                $key = $child.FullName
                 if ($isLink) {
                     $target = Get-DuLinkTargetPath $child
-                    if ($target) { $key = $target.ToLowerInvariant() }
+                    if ($target) { $key = $target }
                 }
-                if ($visited.Contains($key)) {
-                    $Ctx.CycleSkipped++
-                    continue
-                }
-                $visited.Add($key) | Out-Null
-
-                if (Test-DuExcluded $child.Name $child.FullName $Ctx.Exclude) {
-                    $Ctx.Excluded++
-                    continue
-                }
-
-                $childLinks = $item.Links
-                if ($isLink) { $childLinks = @($item.Links) + @($child.Name) }
+                if ($visited.Contains($key)) { $Ctx.CycleSkipped++; continue }
+                $null = $visited.Add($key)
 
                 $stack.Push([pscustomobject]@{
-                    Dir = $child; Depth = $item.Depth + 1; Owner = $owner
-                    Hops = $hops; Links = $childLinks
+                    Dir = $child; Depth = $item.Depth + 1; Parent = $record
+                    Hops = $hops; Links = $links
                 })
             }
         } catch {
@@ -717,16 +901,17 @@ function Invoke-DuTree {
         return @{ Records = $records; Total = $rootTotal; FileRoot = $false }
     }
 
-    # Children are always discovered after their parents, so deepest-first
-    # ordering guarantees a directory's total is complete before it rolls up.
-    $ordered = @($records | Sort-Object -Property Depth -Descending)
-    foreach ($record in $ordered) {
+    # A parent's record is always added before any record below it, so walking the
+    # list backwards guarantees every directory is complete before it rolls up.
+    # (Sorting by depth cost O(n log n) plus a copy of the whole list.)
+    for ($i = $records.Count - 1; $i -ge 0; $i--) {
+        $record = $records[$i]
         $record.Total = $record.Total + $record.Self
         if ($record.Parent) { $record.Parent.Total = $record.Parent.Total + $record.Total }
     }
 
     $total = [Int64] 0
-    if ($records.Count -gt 0) { $total = $records[0].Total }
+    if ($rootRecord) { $total = $rootRecord.Total }
 
     return @{ Records = $records; Total = $total; FileRoot = $false }
 }
@@ -735,7 +920,7 @@ function Invoke-DuTree {
 # Rendering
 # ---------------------------------------------------------------------------
 
-function Get-Truncated {
+function Get-DuTruncated {
     <#  Middle truncation: keeps the root prefix and the leaf name visible. #>
     param([string] $Text, [int] $Width)
 
@@ -747,41 +932,78 @@ function Get-Truncated {
     return $Text.Substring(0, $left) + '...' + $Text.Substring($Text.Length - $right)
 }
 
+function Format-DuTable {
+    <#
+        One table renderer for both the directory rows and the largest-files rows:
+        measures the columns, formats each size once, and returns the lines.
+        $TotalLabel adds the closing total block; pass '' for no footer.
+    #>
+    param(
+        $Rows,          # array or List[object]: both expose Count and an indexer
+        [bool] $Human,
+        [string] $PathHeader,
+        [string] $TotalLabel,
+        [Int64] $TotalBytes,
+        [int] $WidthLimit
+    )
+
+    $lines = New-DuStringList
+    if (-not $Rows -or $Rows.Count -eq 0) { return ,$lines }
+
+    $sizes = [string[]]::new($Rows.Count)
+    $pathWidth = 10
+    $sizeWidth = 10
+
+    for ($i = 0; $i -lt $Rows.Count; $i++) {
+        $sizeText = Format-DuSize ([Int64] $Rows[$i].Bytes) $Human
+        $sizes[$i] = $sizeText
+        if ($Rows[$i].Path.Length -gt $pathWidth) { $pathWidth = $Rows[$i].Path.Length }
+        if ($sizeText.Length -gt $sizeWidth) { $sizeWidth = $sizeText.Length }
+    }
+    if ($pathWidth -gt $WidthLimit) { $pathWidth = $WidthLimit }
+
+    $totalText = $null
+    if ($TotalLabel) {
+        $totalText = Format-DuSize $TotalBytes $Human
+        if ($totalText.Length -gt $sizeWidth) { $sizeWidth = $totalText.Length }
+    }
+
+    $rule = '-' * ($pathWidth + $sizeWidth + 2)
+
+    # Sizes are built into a variable before List.Add(): inside a method call the
+    # commas of '-f a, b' would be read as separate method arguments.
+    $lines.Add($rule)
+    $heading = '{0}  {1}' -f $PathHeader.PadRight($pathWidth), 'Size'.PadLeft($sizeWidth)
+    $lines.Add($heading)
+    $lines.Add($rule)
+
+    for ($i = 0; $i -lt $Rows.Count; $i++) {
+        $pathText = (Get-DuTruncated $Rows[$i].Path $pathWidth).PadRight($pathWidth)
+        $row = '{0}  {1}' -f $pathText, $sizes[$i].PadLeft($sizeWidth)
+        $lines.Add($row)
+    }
+
+    $lines.Add($rule)
+    if ($TotalLabel) {
+        $totalLine = '{0}  {1}' -f $TotalLabel.PadRight($pathWidth), $totalText.PadLeft($sizeWidth)
+        $lines.Add($totalLine)
+        $lines.Add($rule)
+    }
+
+    return ,$lines
+}
+
 function Write-DuTable {
-    param([object[]] $Rows, $Ctx, [string] $Label)
+    param($Rows, $Ctx)
 
     if (-not $Rows -or $Rows.Count -eq 0) {
-        Write-Output ('{0}: no entries to display.' -f $Label)
+        Write-Output 'du: no entries to display.'
         return
     }
 
-    $dirWidth = 10
-    $sizeWidth = 10
-    foreach ($row in $Rows) {
-        if ($row.Path.Length -gt $dirWidth) { $dirWidth = $row.Path.Length }
-        $sizeText = Format-DuSize ([Int64] $row.Bytes) $Ctx.Human
-        if ($sizeText.Length -gt $sizeWidth) { $sizeWidth = $sizeText.Length }
+    foreach ($line in (Format-DuTable $Rows $Ctx.Human 'Directory' 'Total' $Ctx.GrandTotal $DirWidthMax)) {
+        Write-Output $line
     }
-    if ($dirWidth -gt $DirWidthMax) { $dirWidth = $DirWidthMax }
-
-    $rule = '-' * ($dirWidth + $sizeWidth + 2)
-
-    Write-Output $rule
-    Write-Output ('{0}  {1}' -f 'Directory'.PadRight($dirWidth), 'Size'.PadLeft($sizeWidth))
-    Write-Output $rule
-
-    foreach ($row in $Rows) {
-        $sizeText = Format-DuSize ([Int64] $row.Bytes) $Ctx.Human
-        Write-Output ('{0}  {1}' -f
-            (Get-Truncated $row.Path $dirWidth).PadRight($dirWidth),
-            $sizeText.PadLeft($sizeWidth))
-    }
-
-    Write-Output $rule
-    Write-Output ('{0}  {1}' -f
-        'Total'.PadRight($dirWidth),
-        (Format-DuSize ([Int64] $Ctx.GrandTotal) $Ctx.Human).PadLeft($sizeWidth))
-    Write-Output $rule
 }
 
 function Write-DuTopFiles {
@@ -789,60 +1011,38 @@ function Write-DuTopFiles {
 
     if ($Ctx.Top -le 0 -or $Ctx.TopFiles.Count -eq 0) { return }
 
-    $sizeWidth = 10
-    foreach ($file in $Ctx.TopFiles) {
-        $sizeText = Format-DuSize ([Int64] $file.Bytes) $Ctx.Human
-        if ($sizeText.Length -gt $sizeWidth) { $sizeWidth = $sizeText.Length }
-    }
-
-    $pathWidth = 40
-    foreach ($file in $Ctx.TopFiles) {
-        if ($file.Path.Length -gt $pathWidth) { $pathWidth = $file.Path.Length }
-    }
-    if ($pathWidth -gt $DirWidthMax) { $pathWidth = $DirWidthMax }
-
-    $rule = '-' * ($pathWidth + $sizeWidth + 2)
+    $header = 'Largest files (top ' + $Ctx.TopFiles.Count + ')'
 
     Write-Output ''
-    Write-Output $rule
-    Write-Output ('{0}  {1}' -f ('Largest files (top ' + $Ctx.TopFiles.Count + ')').PadRight($pathWidth),
-        'Size'.PadLeft($sizeWidth))
-    Write-Output $rule
-
-    foreach ($file in $Ctx.TopFiles) {
-        $sizeText = Format-DuSize ([Int64] $file.Bytes) $Ctx.Human
-        Write-Output ('{0}  {1}' -f
-            (Get-Truncated $file.Path $pathWidth).PadRight($pathWidth),
-            $sizeText.PadLeft($sizeWidth))
+    foreach ($line in (Format-DuTable $Ctx.TopFiles $Ctx.Human $header '' 0 $DirWidthMax)) {
+        Write-Output $line
     }
-
-    Write-Output $rule
 }
 
 function Write-DuDiagnostics {
     param($Ctx)
 
     if ($Ctx.ErrorsCount -gt 0) {
-        $header = 'du: {0} path(s) could not be read' -f $Ctx.ErrorsCount
-        try { Write-Host $header -ForegroundColor Yellow } catch { Write-Output $header }
-
+        # Warnings, not coloured console text: they land on the warning stream, so
+        # they survive redirection and can be silenced with -WarningAction.
+        Write-Warning ('du: {0} path(s) could not be read' -f $Ctx.ErrorsCount)
         $shown = 0
         foreach ($error in $Ctx.Errors) {
             if ($shown -ge $MaxShownErrors) { break }
             $shown++
-            $line = '  skipped: {0} ({1})' -f $error.Path, $error.Message
-            try { Write-Host $line -ForegroundColor DarkGray } catch { Write-Output $line }
+            Write-Warning ('  skipped: {0} ({1})' -f $error.Path, $error.Message)
         }
         if ($Ctx.ErrorsCount -gt $Ctx.Errors.Count) {
-            $line = '  ({0} further errors not listed)' -f ($Ctx.ErrorsCount - $Ctx.Errors.Count)
-            try { Write-Host $line -ForegroundColor DarkGray } catch { Write-Output $line }
+            Write-Warning ('  ({0} further errors not listed)' -f ($Ctx.ErrorsCount - $Ctx.Errors.Count))
         }
     }
 
     if (-not $Ctx.Stats) { return }
 
     Write-Output ''
-    Write-Output ('Stats: {0} directories, {1} files, {2:N0} bytes counted, {3} skipped links, {4} repeats skipped, {5} hidden/system files skipped, {6} excluded entries, {7} errors' -f
+    Write-Output ('Stats: {0} path(s) scanned in {1:N1}s, {2} directories, {3} files, {4:N0} bytes counted, {5} skipped links, {6} repeats skipped, {7} hidden/system files skipped, {8} excluded entries, {9} errors' -f
+        $Ctx.Roots,
+        $Ctx.Clock.Elapsed.TotalSeconds,
         $Ctx.Dirs.ToString('N0', $Culture),
         $Ctx.Files.ToString('N0', $Culture),
         $Ctx.GrandTotal,
@@ -863,11 +1063,36 @@ function Write-DuLine {
     try { Write-Host $Text -ForegroundColor $Color } catch { Write-Output $Text }
 }
 
+function Get-DuAliasMap {
+    <#
+        letter -> parameter name, read from this script's own metadata. Throws if
+        two switches ever claim the same letter, so uniqueness is enforced at
+        start-up rather than by eye.
+    #>
+    $map = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+
+    if (-not $script:Command) { return $map }
+
+    foreach ($name in $script:Command.Parameters.Keys) {
+        foreach ($alias in @($script:Command.Parameters[$name].Aliases)) {
+            if (-not $alias -or $alias.Length -ne 1) { continue }
+
+            if ($map.ContainsKey($alias)) {
+                throw ('du: the one-letter switch "-' + $alias + '" is claimed by both -' +
+                    $map[$alias] + ' and -' + $name + '; one-letter switches must be unique.')
+            }
+            $map.Add($alias, $name)
+        }
+    }
+
+    return $map
+}
+
 function Get-DuSwitchReference {
     <#
         Built from this script's own parameter metadata, so the listing can never
-        drift from the real parameters, and the one-letter aliases are checked for
-        duplicates here rather than by eye.
+        drift from the real parameters.
     #>
     $summaries = [ordered]@{
         Path          = @{ Label = '-Path <dirs>';     What = 'Directories to measure; accepts wildcards, several paths and file paths. Default: current directory.' }
@@ -888,38 +1113,43 @@ function Get-DuSwitchReference {
         Help          = @{ Label = '-Help';            What = 'Print this reference and exit.' }
     }
 
-    $parameters = $script:Command.Parameters
-    $entries = New-DuList 'object'
-    $letterOwner = New-DuList 'string'
-    $letterUsed = New-DuList 'string'
+    $aliases = Get-DuAliasMap
+    $entries = New-DuObjectList
 
     foreach ($name in $summaries.Keys) {
         $short = ''
-        if ($parameters.ContainsKey($name)) {
-            foreach ($alias in @($parameters[$name].Aliases)) {
-                if ($alias.Length -ne 1) { continue }
-
-                $letter = $alias.ToLowerInvariant()
-                $index = $letterUsed.IndexOf($letter)
-                if ($index -ge 0) {
-                    throw ('du: the one-letter switch "-' + $alias + '" is claimed by both -' +
-                        $letterOwner[$index] + ' and -' + $name + '; one-letter switches must be unique.')
-                }
-                $letterUsed.Add($letter) | Out-Null
-                $letterOwner.Add($name) | Out-Null
-                $short = '-' + $alias
-            }
+        foreach ($letter in $aliases.Keys) {
+            if ($aliases[$letter] -eq $name) { $short = '-' + $letter; break }
         }
 
         $entries.Add([pscustomobject]@{
-            Name = $name
+            Name  = $name
             Label = $summaries[$name].Label
             Short = $short
-            What = $summaries[$name].What
-        }) | Out-Null
+            What  = $summaries[$name].What
+        })
     }
 
     return ,$entries
+}
+
+function Get-DuWrapped {
+    <#  Wrap text on word boundaries so the reference never chops a word. #>
+    param([string] $Text, [int] $Width)
+
+    $lines = New-DuStringList
+    $remaining = $Text
+
+    while ($remaining.Length -gt $Width) {
+        $cut = $Width
+        $space = $remaining.LastIndexOf(' ', $Width)
+        if ($space -gt 0) { $cut = $space }
+        $lines.Add($remaining.Substring(0, $cut))
+        $remaining = $remaining.Substring($cut).TrimStart()
+    }
+    if ($remaining.Length -gt 0) { $lines.Add($remaining) }
+
+    return ,$lines
 }
 
 function Write-DuUsage {
@@ -934,10 +1164,11 @@ function Write-DuUsage {
 
     $textWidth = 66
     $rule = '-' * ($shortWidth + 2 + $nameWidth + 2 + $textWidth)
+    $indent = ' ' * ($shortWidth + 2 + $nameWidth + 2)
 
-    Write-DuLine 'du.ps1 - disk usage of directories, like the Linux du command' 'Cyan'
+    Write-DuLine ('{0} - disk usage of directories, like the Linux du command' -f $script:ScriptName) 'Cyan'
     Write-DuLine ''
-    Write-DuLine 'Usage: .\du.ps1 [[-Path] <dirs>] [-Depth|-MaxDepth N] [-All] [-Summary]'
+    Write-DuLine ('Usage: .\{0} [[-Path] <dirs>] [-Depth|-MaxDepth N] [-All] [-Summary]' -f $script:ScriptName)
     Write-DuLine '                [-HumanReadable] [-Sort] [-Ascending] [-ByName]'
     Write-DuLine '                [-Largest N] [-Top N] [-Exclude names]'
     Write-DuLine '                [-Progress | -NoProgress] [-FollowLinks] [-Stats] [-Help]'
@@ -949,54 +1180,75 @@ function Write-DuUsage {
     Write-DuLine (('Short'.PadRight($shortWidth) + '  ' + 'Switch'.PadRight($nameWidth) + '  What it does')) 'DarkCyan'
     Write-DuLine $rule
 
-    $indent = ' ' * ($shortWidth + 2 + $nameWidth + 2)
     foreach ($entry in $switches) {
-        $text = $entry.What
-        $isFirstLine = $true
-
-        while ($text.Length -gt $textWidth) {
-            # Wrap on a word boundary rather than chopping mid-word.
-            $cut = $textWidth
-            $space = $text.LastIndexOf(' ', $textWidth)
-            if ($space -gt 0) { $cut = $space }
-
-            $chunk = $text.Substring(0, $cut)
-            if ($isFirstLine) {
-                Write-DuLine (($entry.Short.PadRight($shortWidth) + '  ' + $entry.Label.PadRight($nameWidth) + '  ' + $chunk)) 'Gray'
-                $isFirstLine = $false
+        $lines = Get-DuWrapped $entry.What $textWidth
+        $lead = $entry.Short.PadRight($shortWidth) + '  ' + $entry.Label.PadRight($nameWidth) + '  '
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($i -eq 0) {
+                Write-DuLine ($lead + $lines[$i]) 'Gray'
             } else {
-                Write-DuLine ($indent + $chunk) 'Gray'
+                Write-DuLine ($indent + $lines[$i]) 'Gray'
             }
-            $text = $text.Substring($cut).TrimStart()
-        }
-
-        if ($isFirstLine) {
-            Write-DuLine (($entry.Short.PadRight($shortWidth) + '  ' + $entry.Label.PadRight($nameWidth) + '  ' + $text)) 'Gray'
-        } else {
-            Write-DuLine ($indent + $text) 'Gray'
         }
     }
 
     Write-DuLine $rule
     Write-DuLine ''
     Write-DuLine 'Examples' 'DarkCyan'
-    Write-DuLine '  .\du.ps1 .                       measure the current directory'
-    Write-DuLine '  .\du.ps1 C:\Users -h             C:\Users with K/M/G units (-h = -HumanReadable)'
-    Write-DuLine '  .\du.ps1 C:\Users -d 1           like du --max-depth=1: totals complete,'
+    Write-DuLine ('  .\{0} .                       measure the current directory' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -h             C:\Users with K/M/G units (-h = -HumanReadable)' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -d 1           like du --max-depth=1: totals complete,' -f $script:ScriptName)
     Write-DuLine '                                   rows only for the top level of folders'
-    Write-DuLine '  .\du.ps1 C:\Users -s             one total only'
-    Write-DuLine '  .\du.ps1 C:\Users -b 10          the 10 biggest directories'
-    Write-DuLine '  .\du.ps1 C:\Users -t 20          table plus the 20 biggest files'
-    Write-DuLine '  .\du.ps1 C:\Users -a -m          hidden files included, plus statistics'
-    Write-DuLine '  .\du.ps1 C:\Users -n             alphabetical order by path, like du --sort=name'
-    Write-DuLine '  .\du.ps1 C:\Users -d 1 -n        top level of folders, listed A-Z'
-    Write-DuLine '  .\du.ps1 . -s -h -m -q           short forms stack: -Summary -HumanReadable'
+    Write-DuLine ('  .\{0} C:\Users -s             one total only' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -b 10          the 10 biggest directories' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -t 20          table plus the 20 biggest files' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -a -m          hidden files included, plus statistics' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -n             alphabetical order by path, like du --sort=name' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -d 1 -n        top level of folders, listed A-Z' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} . -s -h -m -q           short forms stack: -Summary -HumanReadable' -f $script:ScriptName)
     Write-DuLine '                                   -Stats -NoProgress'
     Write-DuLine ''
-    Write-DuLine 'Running .\du.ps1 with no parameters prints this reference. Pass a path, or' 'DarkGray'
-    Write-DuLine '-Summary / -All and similar switches, to start a scan. For full help:' 'DarkGray'
-    Write-DuLine '  Get-Help .\du.ps1 -Full' 'DarkGray'
+    Write-DuLine ('Running .\{0} with no parameters prints this reference. Pass a path,' -f $script:ScriptName) 'DarkGray'
+    Write-DuLine 'or -Summary / -All and similar switches, to start a scan. For full help:' 'DarkGray'
+    Write-DuLine ('  Get-Help .\{0} -Full' -f $script:ScriptName) 'DarkGray'
     Write-DuLine 'Here -h means human-readable, as in du; the reference itself is -i or -Help.' 'DarkGray'
+}
+
+# ---------------------------------------------------------------------------
+# Context for one scan
+# ---------------------------------------------------------------------------
+
+function New-DuContext {
+    param([string[]] $Exclude, [int] $Top, [int] $MaxDepth, [bool] $ProgressOn,
+          [bool] $SummaryOn, [bool] $HumanOn, [bool] $HiddenOn, [bool] $LinksOn,
+          [bool] $StatsOn)
+
+    return @{
+        Progress        = $ProgressOn
+        Summary         = $SummaryOn
+        Human           = $HumanOn
+        IncludeHidden   = $HiddenOn
+        FollowLinks     = $LinksOn
+        MaxDepth        = $MaxDepth
+        ExcludePatterns = ConvertTo-DuPatterns -Raw $Exclude
+        Top             = $Top
+        Stats           = $StatsOn
+        TopFiles        = New-DuObjectList
+        AllRecords      = New-DuObjectList
+        Errors          = New-DuObjectList
+        ErrorPaths      = New-DuHashSet
+        ErrorsCount     = [Int64] 0
+        Dirs            = [Int64] 0
+        Files           = [Int64] 0
+        LinkSkipped     = [Int64] 0
+        CycleSkipped    = [Int64] 0
+        HiddenSkipped   = [Int64] 0
+        Excluded        = [Int64] 0
+        GrandTotal      = [Int64] 0
+        Roots           = 0
+        Clock           = [System.Diagnostics.Stopwatch]::StartNew()
+        NextProgress    = [Int64] 0
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1007,84 +1259,79 @@ function Write-DuUsage {
 # directory; -Help does the same thing explicitly.
 if ($Help.IsPresent -or ($PSBoundParameters.Count -eq 0)) {
     Write-DuUsage
+    Set-DuExitCode 0
     return
 }
+
+# Enforced before anything else: a scan should not run with a broken alias table.
+$null = Get-DuAliasMap
 
 if ($Depth -lt -1) {
     throw 'du: -Depth (alias -MaxDepth) must be -1 (unlimited) or a non-negative integer.'
 }
 if ($Largest -lt 0) { throw 'du: -Largest must be 0 (no limit) or a positive integer.' }
 if ($Top -lt 0) { throw 'du: -Top must be 0 (none) or a positive integer.' }
-
-if (-not $Path -or $Path.Count -eq 0) { $Path = @($PWD.Path) }
-
-$ctx = @{
-    Progress      = ($Progress.IsPresent -or (-not $NoProgress.IsPresent))
-    Summary       = $Summary.IsPresent
-    Human         = $HumanReadable.IsPresent
-    IncludeHidden = $All.IsPresent
-    FollowLinks   = $FollowLinks.IsPresent
-    MaxDepth      = $Depth
-    Exclude       = Split-DuList -Values $Exclude
-    Top           = $Top
-    Stats         = $Stats.IsPresent
-    TopFiles      = New-DuList 'object'
-    AllRecords    = New-DuList 'object'
-    Errors        = New-DuList 'object'
-    ErrorPaths    = New-Object 'System.Collections.Generic.HashSet[string]'
-    ErrorsCount   = [Int64] 0
-    Dirs          = [Int64] 0
-    Files         = [Int64] 0
-    LinkSkipped   = [Int64] 0
-    CycleSkipped  = [Int64] 0
-    LinkHopLimit  = $LinkHopLimit
-    HiddenSkipped = [Int64] 0
-    Excluded      = [Int64] 0
-    GrandTotal    = [Int64] 0
-    LastProgress  = Get-Date
+if ($Progress.IsPresent -and $NoProgress.IsPresent) {
+    throw 'du: -Progress (-v) and -NoProgress (-q) cannot both be given.'
 }
 
-$roots = Resolve-DuRoots $Path
+if (-not $Path -or $Path.Count -eq 0) { $Path = @(Get-DuBasePath) }
+
+$ctx = New-DuContext -Exclude $Exclude -Top $Top -MaxDepth $Depth `
+    -ProgressOn ($Progress.IsPresent -or (-not $NoProgress.IsPresent)) `
+    -SummaryOn $Summary.IsPresent -HumanOn $HumanReadable.IsPresent `
+    -HiddenOn $All.IsPresent -LinksOn $FollowLinks.IsPresent -StatsOn $Stats.IsPresent
+
+$roots = Resolve-DuRoots -Requested $Path -Ctx $ctx
 if ($roots.Count -eq 0) {
+    # Only reached after the per-path messages above, so this adds no new error.
     Write-Warning 'du: nothing to scan.'
+    Stop-DuScript $ctx
     return
 }
 
-$rootTotals = New-DuList 'object'
+$ctx.Roots = $roots.Count
+Write-Verbose ('du: measuring {0} path(s): {1}' -f $roots.Count, ($roots -join ', '))
+
+$rootTotals = New-DuObjectList
 
 try {
     foreach ($root in $roots) {
         $result = Invoke-DuTree -Root $root -Ctx $ctx
-        $rootTotals.Add([pscustomobject]@{ Path = $root; Bytes = [Int64] $result.Total }) | Out-Null
+        $rootTotals.Add([pscustomobject]@{ Path = $root; Bytes = [Int64] $result.Total })
         $ctx.GrandTotal += [Int64] $result.Total
+        Write-Verbose ('du: {0} = {1:N0} bytes' -f $root, [Int64] $result.Total)
 
         if ($ctx.Summary) {
             # Only totals matter in summary mode: drop the per-directory records.
             $result.Records.Clear()
         } else {
-            foreach ($record in $result.Records) { $ctx.AllRecords.Add($record) | Out-Null }
+            foreach ($record in $result.Records) { $ctx.AllRecords.Add($record) }
         }
     }
 } finally {
     Complete-DuProgress $ctx
 }
 
-# Build the directory rows.
-$rows = New-DuList 'object'
+# Build the directory rows. Only directories inside -Depth get a row; their totals
+# already carry everything below them however deep.
+$rows = New-DuObjectList
 
 if ($ctx.Summary) {
-    foreach ($entry in $rootTotals) { $rows.Add($entry) | Out-Null }
+    foreach ($entry in $rootTotals) { $rows.Add($entry) }
 } else {
     foreach ($record in $ctx.AllRecords) {
-        $rows.Add([pscustomobject]@{ Path = $record.Path; Bytes = [Int64] $record.Total }) | Out-Null
+        if ($record.Shown) {
+            $rows.Add([pscustomobject]@{ Path = $record.Path; Bytes = [Int64] $record.Total })
+        }
     }
 }
 
 # Ordering: size by default (largest first), and -Ascending flips whatever order
-# is in use. -ByName switches to alphabetical order, which starts at A.
-# -Sort is accepted for command-line familiarity and has no effect of its own.
+# is in use. -ByName switches to alphabetical order, which starts at A; it wins if
+# -Sort is also given, since -Sort only names the already-default order.
 $reverse = $Ascending.IsPresent
-$null = $Sort
+$byName = $ByName.IsPresent -and (-not $Sort.IsPresent)
 
 if ($Largest -gt 0 -and $rows.Count -gt $Largest) {
     # -Largest always means the N biggest, whatever the display order is.
@@ -1095,7 +1342,7 @@ if ($Largest -gt 0 -and $rows.Count -gt $Largest) {
 
 # Sorting strings with Sort-Object is case-insensitive, and PowerShell 5.1 has no
 # -Ascending parameter for it, so the direction is chosen with -Descending.
-if ($ByName.IsPresent) {
+if ($byName) {
     $sorted = @($candidates | Sort-Object -Property Path -Descending:$reverse)
 } elseif ($reverse) {
     $sorted = @($candidates | Sort-Object -Property Bytes)
@@ -1103,6 +1350,9 @@ if ($ByName.IsPresent) {
     $sorted = @($candidates | Sort-Object -Property Bytes -Descending)
 }
 
-Write-DuTable -Rows $sorted -Ctx $ctx -Label 'du'
+Write-DuTable -Rows $sorted -Ctx $ctx
 Write-DuTopFiles -Ctx $ctx
 Write-DuDiagnostics -Ctx $ctx
+
+# Signal failure to callers (CI checks), without killing a dot-sourcing session.
+Stop-DuScript $ctx
