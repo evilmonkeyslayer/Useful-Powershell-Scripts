@@ -3,7 +3,7 @@
     Reports disk usage for one or more directory trees, like the Linux `du` command.
 
 .DESCRIPTION
-    du.ps1 is a self-contained PowerShell similar to the Linux `du` (disk usage)
+    du.ps1 is a self-contained PowerShell port of the Linux `du` (disk usage)
     utility. It walks directory trees with the built-in .NET types System.IO.DirectoryInfo
     and System.IO.FileInfo, sums file sizes using 64-bit integers, prints a cumulative
     size per directory (largest first), and prints a grand total.
@@ -25,7 +25,7 @@
 
     Every switch also has a one-letter form, and no two switches share a letter:
     -p Path, -d Depth (also -MaxDepth), -a All, -s Summary, -h HumanReadable,
-    -r Sort, -u Ascending, -n ByName, -b Largest, -t Top, -x Exclude, -v Progress,
+    -r Sort (size|name), -u Ascending, -b Largest, -t Top, -x Exclude, -v Progress,
     -q NoProgress, -l FollowLinks, -m Stats, -i Help. So .\du.ps1 C:\Users -h is the
     same as -HumanReadable, and .\du.ps1 . -s -h -q is the same as -Summary
     -HumanReadable -NoProgress. Letters are matched case-insensitively, as everywhere
@@ -72,23 +72,23 @@
     machine's regional settings are.
 
 .PARAMETER Sort
-    Short form: -r
-    Sort directory rows by size. Size order is already the default; the switch is
-    accepted so familiar `du`-style invocations work. Use -Ascending to reverse.
+    Short form: -r, also spelled -SortOrder
+    Which key the directory rows are ordered by: `size` (the default) or `name`.
+    The equivalent of `du --sort=size` and `du --sort=name`.
+      size: biggest first, which is what plain `du -s` output looks like when
+            ordered; -Ascending turns it into smallest first.
+      name: alphabetical by full path, A-Z; -Ascending turns it into Z-A.
+    The value is case-insensitive, so -Sort Name works as well as -Sort name, and
+    tab-completion offers both values. Omitting -Sort entirely is the same as
+    -Sort size. Sizes are the full recursive totals either way; only the order of
+    the rows changes. Combine with -Depth to keep a -Depth 1 listing in the chosen
+    order, and with -Largest to take the N biggest directories and then print them
+    in the chosen order (-Largest always selects by size).
 
 .PARAMETER Ascending
     Short form: -u
-    Sort directory rows smallest first instead of largest first. With -ByName this
-    reverses the alphabetical order to Z-A instead of A-Z.
-
-.PARAMETER ByName
-    Short form: -n, also spelled -SortByName (like `du --sort=name`)
-    Order the directory rows alphabetically by their full path instead of by size.
-    Comparison is case-insensitive, so folders sort together regardless of how they
-    are capitalised. Sizes are still the full recursive totals; only the order of
-    the rows changes. Combine with -Depth to keep a -Depth 1 listing alphabetical,
-    with -Largest to take the N biggest directories and then print them A-Z, and
-    with -Ascending to go Z-A.
+    Reverse whatever order -Sort chose: smallest first when sorting by size, Z-A
+    when sorting by name. It applies to both orders and changes nothing else.
 
 .PARAMETER Largest
     Short form: -b
@@ -185,12 +185,17 @@
     first, with scan statistics at the end.
 
 .EXAMPLE
-    .\du.ps1 -Path C:\Users -ByName
+    .\du.ps1 -Path C:\Users -Sort name
     Equivalent of `du --sort=name C:\Users`: rows in alphabetical order by path.
 
 .EXAMPLE
-    .\du.ps1 -Path C:\Users -Depth 1 -ByName
-    Top-level folders only, listed A-Z.
+    .\du.ps1 -Path C:\Users -Depth 1 -Sort name -Ascending
+    Top-level folders only, listed Z-A.
+
+.EXAMPLE
+    .\du.ps1 -Path C:\Users -Sort size -Ascending -h
+    Sizes are the default order, so -Sort size is what a plain run does; here the
+    smallest directories come first, with human-readable units.
 
 .EXAMPLE
     .\du.ps1 -Path C:\Users,D:\Data -Exclude 'node_modules','*.tmp','*\AppData' -NoProgress
@@ -215,9 +220,9 @@
 .NOTES
     One-letter switch forms:
       -p Path          -d Depth          -a All           -s Summary
-      -h HumanReadable -r Sort           -u Ascending     -n ByName
-      -b Largest       -t Top            -x Exclude       -v Progress
-      -q NoProgress    -l FollowLinks    -m Stats         -i Help
+      -h HumanReadable -r Sort           -u Ascending     -b Largest
+      -t Top           -x Exclude        -v Progress      -q NoProgress
+      -l FollowLinks   -m Stats          -i Help
     Each letter belongs to exactly one switch; the script checks this at start-up,
     before any scanning, and refuses to start if two switches ever claim the same
     letter. The reference listing is built from the same check, so it can never
@@ -241,9 +246,11 @@
         skips them entirely (they are counted in -Stats) unless -FollowLinks.
       * du counts hard links once; Windows hard links are counted per name.
       * Human units are 1024-based and labelled KB/MB/GB/TB (du -h prints K/M/G).
-      * Output is sorted by size, largest first, not in traversal order. Use
-        -Ascending to reverse, or -ByName for alphabetical order by path (the
-        equivalent of `du --sort=name`). There is no du equivalent for -Top.
+      * Output is ordered by -Sort: -Sort size (largest first) is the default and
+        matches a plain run; -Sort name is the equivalent of `du --sort=name`.
+        -Ascending reverses whichever order is in use. du's other --sort keys
+        (none, time, ctime, version) have no equivalent here. There is no du
+        equivalent for -Top.
       * -Depth (also spelled -MaxDepth) is the direct equivalent of
         `du --max-depth=N`: the entire tree is measured and every directory row
         includes all of its descendants, but only directories within N levels get
@@ -297,14 +304,12 @@ param(
     [Alias('h')]
     [switch] $HumanReadable,
 
-    [Alias('r')]
-    [switch] $Sort,
+    [Alias('r', 'SortOrder')]
+    [ValidateSet('size', 'name')]
+    [string] $Sort = 'size',
 
     [Alias('u')]
     [switch] $Ascending,
-
-    [Alias('n', 'SortByName')]
-    [switch] $ByName,
 
     [Alias('b')]
     [int] $Largest = 0,
@@ -1100,9 +1105,8 @@ function Get-DuSwitchReference {
         All           = @{ Label = '-All';             What = 'Include hidden and system files. Hidden directories are always traversed.' }
         Summary       = @{ Label = '-Summary';         What = 'Print one total per path instead of one row per directory (like du -s).' }
         HumanReadable = @{ Label = '-HumanReadable';   What = 'Show sizes as B, KB, MB, GB or TB (1024-based) instead of raw bytes.' }
-        Sort          = @{ Label = '-Sort';            What = 'Order by size; that is already the default, so this is accepted for familiarity.' }
-        Ascending     = @{ Label = '-Ascending';       What = 'Reverse the display order: smallest first, or Z-A when combined with -ByName.' }
-        ByName        = @{ Label = '-ByName';          What = 'du --sort=name: order rows alphabetically by full path instead of by size. Case-insensitive.' }
+        Sort          = @{ Label = '-Sort <size|name>'; What = 'What to order rows by: size (the default, largest first) or name (alphabetical by path). du --sort=size / du --sort=name.' }
+        Ascending     = @{ Label = '-Ascending';       What = 'Reverse whichever order -Sort chose: smallest first for size, Z-A for name.' }
         Largest       = @{ Label = '-Largest <N>';     What = 'Print only the N biggest directories.' }
         Top           = @{ Label = '-Top <N>';         What = 'Also list the N largest individual files after the table.' }
         Exclude       = @{ Label = '-Exclude <names>'; What = 'Skip matching names or paths; wildcards and comma-separated lists work.' }
@@ -1169,7 +1173,7 @@ function Write-DuUsage {
     Write-DuLine ('{0} - disk usage of directories, like the Linux du command' -f $script:ScriptName) 'Cyan'
     Write-DuLine ''
     Write-DuLine ('Usage: .\{0} [[-Path] <dirs>] [-Depth|-MaxDepth N] [-All] [-Summary]' -f $script:ScriptName)
-    Write-DuLine '                [-HumanReadable] [-Sort] [-Ascending] [-ByName]'
+    Write-DuLine '                [-HumanReadable] [-Sort size|name] [-Ascending]'
     Write-DuLine '                [-Largest N] [-Top N] [-Exclude names]'
     Write-DuLine '                [-Progress | -NoProgress] [-FollowLinks] [-Stats] [-Help]'
     Write-DuLine ''
@@ -1203,8 +1207,10 @@ function Write-DuUsage {
     Write-DuLine ('  .\{0} C:\Users -b 10          the 10 biggest directories' -f $script:ScriptName)
     Write-DuLine ('  .\{0} C:\Users -t 20          table plus the 20 biggest files' -f $script:ScriptName)
     Write-DuLine ('  .\{0} C:\Users -a -m          hidden files included, plus statistics' -f $script:ScriptName)
-    Write-DuLine ('  .\{0} C:\Users -n             alphabetical order by path, like du --sort=name' -f $script:ScriptName)
-    Write-DuLine ('  .\{0} C:\Users -d 1 -n        top level of folders, listed A-Z' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -r name        alphabetical order by path, like du --sort=name' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -d 1 -r name   top level of folders, listed A-Z' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -u             size order (the default) reversed: smallest first' -f $script:ScriptName)
+    Write-DuLine ('  .\{0} C:\Users -r name -u     alphabetical order reversed: Z-A' -f $script:ScriptName)
     Write-DuLine ('  .\{0} . -s -h -m -q           short forms stack: -Summary -HumanReadable' -f $script:ScriptName)
     Write-DuLine '                                   -Stats -NoProgress'
     Write-DuLine ''
@@ -1327,11 +1333,13 @@ if ($ctx.Summary) {
     }
 }
 
-# Ordering: size by default (largest first), and -Ascending flips whatever order
-# is in use. -ByName switches to alphabetical order, which starts at A; it wins if
-# -Sort is also given, since -Sort only names the already-default order.
+# Ordering: -Sort picks the key, size by default. -Ascending reverses whichever key
+# is in use, so it means "smallest first" for size and "Z-A" for name. The value is
+# validated at binding time, but keeps the caller's spelling, so it is lower-cased
+# before being compared.
+$sortKey = $Sort.ToLowerInvariant()
 $reverse = $Ascending.IsPresent
-$byName = $ByName.IsPresent -and (-not $Sort.IsPresent)
+Write-Verbose ('du: ordering by {0}, {1}' -f $sortKey, $(if ($reverse) { 'reversed' } else { 'normal' }))
 
 if ($Largest -gt 0 -and $rows.Count -gt $Largest) {
     # -Largest always means the N biggest, whatever the display order is.
@@ -1342,7 +1350,7 @@ if ($Largest -gt 0 -and $rows.Count -gt $Largest) {
 
 # Sorting strings with Sort-Object is case-insensitive, and PowerShell 5.1 has no
 # -Ascending parameter for it, so the direction is chosen with -Descending.
-if ($byName) {
+if ($sortKey -eq 'name') {
     $sorted = @($candidates | Sort-Object -Property Path -Descending:$reverse)
 } elseif ($reverse) {
     $sorted = @($candidates | Sort-Object -Property Bytes)
