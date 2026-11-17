@@ -3,7 +3,7 @@
     Reports disk usage for one or more directory trees, like the Linux `du` command.
 
 .DESCRIPTION
-    du.ps1 is a self-contained PowerShell port of the Linux `du` (disk usage) utility.
+    du.ps1 is a self-contained PowerShell equivalent to the Linux `du` (disk usage) utility.
     It walks directory trees with the built-in .NET types System.IO.DirectoryInfo and
     System.IO.FileInfo, sums file sizes using 64-bit integers, prints a cumulative size
     per directory (largest first), and prints a grand total.
